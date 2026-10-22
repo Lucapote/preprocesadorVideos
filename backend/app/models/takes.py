@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -12,11 +12,36 @@ class DiscardReason(str, Enum):
     NONE = "none"
     RETAKE = "retake"
     EMPTY = "empty_take"
+    ABORTED = "aborted_attempt"
     MANUAL = "manual"
 
 
+class SemanticBoundaryAnalysis(BaseModel):
+    format_type: Literal["monologue", "ping_pong_dialogue", "trend_reaction"] = Field(
+        ..., description="Tipo de interacción detectada en el audio."
+    )
+    status: Literal["complete_exchange", "aborted_attempt", "partial_response"] = Field(
+        ..., description="Estado de la toma: completada con éxito, intento fallido o respuesta incompleta."
+    )
+    last_valid_word_index: int = Field(
+        ..., description="Índice numérico exacto de la última palabra que compone la respuesta o remate válido."
+    )
+    first_valid_word_index: int = Field(
+        default=0, description="Índice numérico de la primera palabra válida (omite arranques en falso o titubeos iniciales)."
+    )
+    punchline_or_climax_detected: bool = Field(
+        ..., description="True si la interacción concluye con un remate claro, chiste o respuesta definitiva."
+    )
+    confidence: float = Field(
+        ..., ge=0.0, le=1.0, description="Nivel de certidumbre del modelo sobre la delimitación."
+    )
+    reasoning: str = Field(
+        ..., description="Explicación ultra breve (1 frase) del motivo del corte."
+    )
+
+
 class InternalSilence(BaseModel):
-    start_time: float = Field(..., description="Timestamp donde inicia el silencio (> 1.0s) dentro de la toma")
+    start_time: float = Field(..., description="Timestamp donde inicia el silencio (> 2.2s) dentro de la toma")
     end_time: float = Field(..., description="Timestamp donde finaliza el silencio dentro de la toma")
     duration: float = Field(..., description="Duración exacta del silencio interno en segundos")
 
@@ -48,15 +73,15 @@ class TakeSegment(BaseModel):
     # Puntos de referencia internos
     anchor_timestamp: float = Field(..., description="Segundo del ancla inicial (aplauso o fin de claqueta)")
     anchor_type: str = Field("clap", description="Tipo de ancla: 'clap' o 'voice_fallback'")
-    speech_start: float = Field(..., description="Segundo donde arranca la primera palabra del discurso")
-    speech_end: float = Field(..., description="Segundo donde finaliza la última palabra del discurso")
+    speech_start: float = Field(..., description="Segundo donde arranca la primera palabra válida del discurso")
+    speech_end: float = Field(..., description="Segundo donde finaliza la última palabra válida del discurso")
     
     # Contenido del discurso, silencios internos y dinámicas acústicas
     transcript_snippet: str = Field("", description="Transcripción exacta de lo hablado en esta toma")
     speech_text: str = Field("", description="Alias compatible para el frontend")
     words_count: int = Field(0, description="Cantidad de palabras pronunciadas")
     word_count: int = Field(0, description="Alias compatible para el frontend")
-    internal_silences: List[InternalSilence] = Field(default_factory=list, description="Lista de silencios internos detectados (> 1.0s)")
+    internal_silences: List[InternalSilence] = Field(default_factory=list, description="Lista de silencios internos detectados (> 2.2s)")
     acoustic_phrases: List[AcousticPhrase] = Field(default_factory=list, description="Frases con energía relativa en dB para CapCut")
     
     # Archivo físico recortado por FFmpeg y URL estática
@@ -64,10 +89,13 @@ class TakeSegment(BaseModel):
     video_url: Optional[str] = Field(None, description="URL pública para reproducción web (/storage/tomas/...)")
     rendered: bool = Field(False, description="True si el clip físico fue renderizado por FFmpeg")
     
-    # Selección editorial
+    # Selección editorial y metadatos semánticos (Fase 2)
+    usable: bool = Field(True, description="False si la toma fue un intento abortado o vacío")
     status: TakeStatus = Field(TakeStatus.KEEP, description="Estado editorial de la toma ('keep' o 'discard')")
     discard_reason: DiscardReason = Field(DiscardReason.NONE, description="Motivo de descarte si aplica")
     is_best_take: bool = Field(False, description="True si es la versión definitiva sugerida para el bloque")
+    semantic_reasoning: str = Field("", description="Explicación breve del corte o estado semántico")
+    semantic_analysis: Optional[SemanticBoundaryAnalysis] = Field(None, description="Resultado estructurado del analizador semántico")
 
 
 class Phase2Request(BaseModel):

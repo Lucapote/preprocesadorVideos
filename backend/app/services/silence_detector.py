@@ -27,7 +27,8 @@ NOISE_FLOOR_MAX_DB = -35.0     # Techo máximo permitido como piso de silencio (
 DB_MARGIN_OVER_FLOOR = 6.0     # Margen en dB sobre el piso de ruido para marcar umbral
 DB_THRESHOLD_MIN = -50.0       # Umbral mínimo de corte (dB)
 DB_THRESHOLD_MAX = -25.0       # Umbral máximo de corte (dB)
-MIN_SILENCE_DURATION_MS = 700.0  # Duración mínima para calificar como silencio largo (ms)
+DESTRUCTIVE_SILENCE_DURATION_S = 2.2    # Umbral de silencio destructivo en dinámicas de 2 personas (s)
+MIN_SILENCE_DURATION_MS = 2200.0        # Duración mínima para calificar como silencio destructivo (ms)
 
 
 @dataclass
