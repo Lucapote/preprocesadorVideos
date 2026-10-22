@@ -4,6 +4,7 @@ venv/
 ENV/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Node & Frontend
 node_modules/
@@ -15,12 +16,21 @@ backend/storage/uploads/*
 !backend/storage/uploads/.gitignore
 backend/storage/artifacts/*
 !backend/storage/artifacts/.gitignore
+backend/storage/tomas/*
+!backend/storage/tomas/.gitignore
+backend/storage/temp/*
+!backend/storage/temp/.gitignore
 
 # Variables de entorno
 .env
-.env.local
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
 
-# IDE
+# IDE & Archivos del sistema
 .vscode/
 .idea/
 *.swp
+.DS_Store
