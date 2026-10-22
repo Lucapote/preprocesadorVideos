@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from app.core.config import settings
 from app.models.takes import SemanticBoundaryAnalysis
+from app.services.embedding_classifier import evaluate_take_tail_with_minilm
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,12 @@ def deterministic_boundary_fallback(
             reasoning=f"Corte determinista por meta-habla detectada: '{match.group(0)}'."
         )
 
+    # 4. Capa 2: Clasificación de descarte semántico por MiniLM (Regla 1 de reglasinternas.md)
+    # Detecta paráfrasis o bloopers semánticos que el regex literal no captura
+    minilm_analysis, discard_score = evaluate_take_tail_with_minilm(words)
+    if minilm_analysis is not None and discard_score >= 0.58:
+        return minilm_analysis
+
     # Escena limpia por defecto
     return SemanticBoundaryAnalysis(
         format_type="monologue",
@@ -216,7 +223,7 @@ def analyze_semantic_boundary(
         if cut_claps:
             return deterministic_boundary_fallback(words, clap_timestamps=clap_timestamps)
 
-    # 2. Selección de proveedor en orden de prioridad
+    # 2. Selección de proveedor en orden de prioridad para Capa 3
     if settings.GROQ_API_KEY:
         api_key = settings.GROQ_API_KEY.strip()
         base_url = (settings.GROQ_BASE_URL or "https://api.groq.com/openai/v1").rstrip("/")

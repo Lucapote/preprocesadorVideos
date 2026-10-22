@@ -364,3 +364,31 @@ def test_offline_fallback_cuts_before_acoustic_clap():
     assert len(valid) == 6
     assert valid[-1].word == "salsa"
     assert round(end_t, 2) == 3.0
+
+
+def test_capa2_minilm_detects_paraphrased_blooper():
+    """
+    Capa 2 (MiniLM): Regla 1 de reglasinternas.md.
+    Verifica que el modelo local de embeddings clasifique y pode un blooper
+    parafroseado al final de la toma en modo offline sin requerir LLM de pago.
+    """
+    words = _make_words([
+        ("Hoy", 1.0, 1.3),
+        ("les", 1.35, 1.5),
+        ("traigo", 1.55, 1.9),
+        ("tres", 1.95, 2.2),
+        ("recetas", 2.25, 2.7),
+        ("increíbles.", 2.75, 3.4),
+        # Cola de descarte / blooper
+        ("corte", 4.0, 4.4),
+        ("camarógrafo", 4.45, 5.1),
+    ])
+
+    analysis = deterministic_boundary_fallback(words)
+
+    assert analysis.status == "complete_exchange"
+    assert analysis.first_valid_word_index == 0
+    # Debe podar el blooper en el índice 5 ('increíbles.')
+    assert analysis.last_valid_word_index == 5
+    assert analysis.confidence >= 0.58
+

@@ -1,14 +1,20 @@
+from pathlib import Path
 import uuid
 from typing import List
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import ValidationError
+
+from app.core.config import settings
 from app.models.markers import (
-    Phase0Request, 
+    Phase0Request,
     Phase0Response,
     Phase1Request,
-    Phase1Response
+    Phase1Response,
 )
-from app.models.takes import Phase2Request, Phase2Response
+from app.models.matching import Phase3Report, Phase3Request
+from app.models.takes import Phase2Request, Phase2Response, TakeSegment
 from app.models.task import TaskRunRequest, TaskResponse
+from app.services.script_matcher import run_phase_3_matching
 from app.services.transcription import (
     create_task_record,
     execute_phase_0,
@@ -16,10 +22,28 @@ from app.services.transcription import (
     execute_phase_2,
     get_task,
     list_all_tasks,
-    run_phase_0_pipeline
+    run_phase_0_pipeline,
 )
 
 router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
+
+
+def _resolve_client_script_path(cliente: str, explicit_path: str | None = None) -> Path:
+    if explicit_path:
+        p = Path(explicit_path)
+        if p.exists():
+            return p
+
+    candidates = [
+        Path("clientes") / cliente / "guion.json",
+        settings.STORAGE_DIR.parent / "clientes" / cliente / "guion.json",
+        settings.STORAGE_DIR.parent.parent / "clientes" / cliente / "guion.json",
+        settings.STORAGE_DIR / "clientes" / cliente / "guion.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[1]
 
 
 @router.post("/detect-markers", response_model=Phase0Response)
@@ -35,15 +59,15 @@ async def detect_markers_endpoint(request: Phase0Request):
             file_path=request.file_path,
             video_id=request.video_id,
             model_size=request.model_size,
-            sample_mode=request.sample_mode
+            sample_mode=request.sample_mode,
         )
         return response
     except FileNotFoundError as fnf_err:
         raise HTTPException(status_code=404, detail=str(fnf_err))
     except Exception as exc:
         raise HTTPException(
-            status_code=500, 
-            detail=f"Error durante el procesamiento de la Fase 0: {str(exc)}"
+            status_code=500,
+            detail=f"Error durante el procesamiento de la Fase 0: {str(exc)}",
         )
 
 
@@ -60,7 +84,7 @@ async def run_phase_1_endpoint(request: Phase1Request):
             file_path=request.file_path,
             video_id=request.video_id,
             markers=request.markers,
-            sample_mode=request.sample_mode
+            sample_mode=request.sample_mode,
         )
         return response
     except FileNotFoundError as fnf_err:
@@ -68,7 +92,7 @@ async def run_phase_1_endpoint(request: Phase1Request):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Error durante la detección de aplausos (Fase 1): {str(exc)}"
+            detail=f"Error durante la detección de aplausos (Fase 1): {str(exc)}",
         )
 
 
@@ -87,7 +111,7 @@ async def run_phase_2_endpoint(request: Phase2Request):
             lead_in_padding_s=request.lead_in_padding_s,
             lead_out_padding_s=request.lead_out_padding_s,
             cut_video=request.cut_video,
-            sample_mode=request.sample_mode
+            sample_mode=request.sample_mode,
         )
         return response
     except FileNotFoundError as fnf_err:
@@ -95,14 +119,64 @@ async def run_phase_2_endpoint(request: Phase2Request):
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Error durante la segmentación de tomas (Fase 2): {str(exc)}"
+            detail=f"Error durante la segmentación de tomas (Fase 2): {str(exc)}",
+        )
+
+
+@router.post("/run-phase-3", response_model=Phase3Report)
+async def run_phase_3_endpoint(request: Phase3Request):
+    """
+    Endpoint síncrono de la Fase 3:
+    Valida `clientes/<cliente>/guion.json` y ejecuta el emparejamiento en cascada
+    (Capa 1 Marca Directa -> Capa 2 MiniLM Embeddings -> Capa 3 LLM Árbitro -> decisiones.json).
+    Si `guion.json` no existe o es inválido según el contrato Pydantic, devuelve HTTP 422.
+    """
+    script_path = _resolve_client_script_path(request.cliente, request.script_path)
+    if not script_path.exists():
+        raise HTTPException(
+            status_code=422,
+            detail=f"No se encontró el archivo guion.json para el cliente '{request.cliente}' en '{script_path}'.",
+        )
+
+    takes: List[TakeSegment] = []
+    if request.takes is not None:
+        takes = request.takes
+    elif request.task_id:
+        task = get_task(request.task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Tarea '{request.task_id}' no encontrada.")
+        raw_takes = (task.result or {}).get("takes", [])
+        takes = [TakeSegment.model_validate(t) for t in raw_takes]
+    elif request.file_path or request.sample_mode:
+        phase2_res = await execute_phase_2(
+            file_path=request.file_path,
+            cut_video=False,
+            sample_mode=request.sample_mode,
+        )
+        takes = phase2_res.takes
+
+    try:
+        report = run_phase_3_matching(
+            cliente=request.cliente,
+            script_path=script_path,
+            takes=takes,
+        )
+        return report
+    except ValidationError as val_err:
+        raise HTTPException(status_code=422, detail=val_err.errors())
+    except ValueError as val_err:
+        raise HTTPException(status_code=422, detail=str(val_err))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error durante el emparejamiento de guion (Fase 3): {str(exc)}",
         )
 
 
 @router.post("/run-phase-0", response_model=TaskResponse)
 async def trigger_phase_0(
     request: TaskRunRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
 ):
     """
     Inicia la ejecución asíncrona no bloqueante de la Fase 0 del pipeline:
@@ -111,13 +185,12 @@ async def trigger_phase_0(
     task_id = f"task_{uuid.uuid4().hex[:8]}"
     task = create_task_record(task_id)
 
-    # Disparar tarea en segundo plano sin bloquear respuesta HTTP
     background_tasks.add_task(
         run_phase_0_pipeline,
         task_id=task_id,
         file_path=request.file_path,
         sample_mode=request.sample_mode,
-        options=request.options
+        options=request.options,
     )
 
     return task

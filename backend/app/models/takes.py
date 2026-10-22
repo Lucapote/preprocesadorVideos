@@ -59,22 +59,25 @@ class TakeSegment(BaseModel):
     take_id: str = Field(..., description="Hash determinista sha256 único de la toma (archivo + timestamp)")
     id_toma: Optional[str] = Field(None, description="Alias compatible para el frontend")
     
-    reel: int = Field(1, description="Número identificador del reel")
-    bloque: int = Field(..., description="Número de bloque de guión")
-    toma: int = Field(..., description="Número de toma de dicho bloque")
+    reel: int = Field(1, description="Número identificador del reel / video")
+    bloque: int = Field(0, description="Número de bloque de guión (0 si no tiene marca verbal)")
+    toma: int = Field(1, description="Número de toma de dicho bloque")
+    video_id: Optional[str] = Field(None, description="Identificador explícito de video (ej. V01)")
+    bloque_id: Optional[str] = Field(None, description="Identificador explícito de bloque (ej. B01)")
+    raw_phrase_detected: Optional[str] = Field(None, description="Frase cruda de claqueta si existió")
     
     # Delimitación temporal exacta (In / Out)
-    cut_start: float = Field(..., description="Segundo exacto de corte inicial (sin pre-roll muerto)")
-    cut_end: float = Field(..., description="Segundo exacto de corte final (sin post-roll muerto)")
-    in_point: float = Field(..., description="Alias compatible de cut_start")
-    out_point: float = Field(..., description="Alias compatible de cut_end")
-    duration: float = Field(..., description="Duración útil de la toma en segundos")
+    cut_start: float = Field(0.0, description="Segundo exacto de corte inicial (sin pre-roll muerto)")
+    cut_end: float = Field(0.0, description="Segundo exacto de corte final (sin post-roll muerto)")
+    in_point: float = Field(0.0, description="Alias compatible de cut_start")
+    out_point: float = Field(0.0, description="Alias compatible de cut_end")
+    duration: float = Field(0.0, description="Duración útil de la toma en segundos")
     
     # Puntos de referencia internos
-    anchor_timestamp: float = Field(..., description="Segundo del ancla inicial (aplauso o fin de claqueta)")
-    anchor_type: str = Field("clap", description="Tipo de ancla: 'clap' o 'voice_fallback'")
-    speech_start: float = Field(..., description="Segundo donde arranca la primera palabra válida del discurso")
-    speech_end: float = Field(..., description="Segundo donde finaliza la última palabra válida del discurso")
+    anchor_timestamp: float = Field(0.0, description="Segundo del ancla inicial (aplauso o fin de claqueta)")
+    anchor_type: str = Field("clap", description="Tipo de ancla: 'clap', 'voice_fallback' o 'none'")
+    speech_start: float = Field(0.0, description="Segundo donde arranca la primera palabra válida del discurso")
+    speech_end: float = Field(0.0, description="Segundo donde finaliza la última palabra válida del discurso")
     
     # Contenido del discurso, silencios internos y dinámicas acústicas
     transcript_snippet: str = Field("", description="Transcripción exacta de lo hablado en esta toma")

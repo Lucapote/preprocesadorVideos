@@ -230,3 +230,45 @@ def test_fallback_when_no_clap_present(tmp_path: Path):
     assert clap.clap_detected is False
     assert clap.clap_timestamp == 2.8  # Fallback a phrase_end
     assert clap.clap_confidence == 0.0
+
+
+def test_silero_vad_rejects_vocal_false_positive(tmp_path: Path):
+    """
+    Capa 2 (Silero VAD): Regla 4 de reglasinternas.md.
+    Si un pico físico de ataque coincide con voz humana activa (ej. consonante oclusiva),
+    Silero VAD lo rechaza como falso positivo y activa el fallback transparente.
+    """
+    sr = 16000
+    clap_time = 3.2
+    signal = generate_synthetic_clap(
+        duration_s=5.0,
+        sr=sr,
+        clap_time_s=clap_time,
+        clap_amplitude=0.90,
+        noise_level=0.01
+    )
+
+    wav_path = tmp_path / "test_vocal_fp.wav"
+    sf.write(str(wav_path), signal, sr)
+
+    markers = [
+        MarkerResult(
+            bloque=1, toma=1,
+            raw_text="Bloque 1, toma 1.",
+            start_time=1.0, end_time=2.5,
+            confidence=0.95
+        )
+    ]
+
+    # Simular que Silero VAD detecta voz activa en la ventana del pico
+    from unittest.mock import patch
+    with patch("app.services.clap_detector.verify_clap_not_voice_silero", return_value=False):
+        claps = detect_claps_for_markers(wav_path, markers)
+
+    assert len(claps) == 1
+    clap = claps[0]
+    # Debe ser rechazado por Silero VAD y activar fallback a phrase_end
+    assert clap.clap_detected is False
+    assert clap.anchor_type == "voice_fallback"
+    assert clap.anchor_timestamp == 2.5
+

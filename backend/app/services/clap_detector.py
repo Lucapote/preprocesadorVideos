@@ -186,6 +186,59 @@ def detect_clap_in_signal(
     return best
 
 
+def verify_clap_not_voice_silero(
+    signal: np.ndarray,
+    sr: int,
+    clap_timestamp_rel: float,
+    guard_window_ms: float = 35.0
+) -> bool:
+    """
+    Capa 2 (Silero VAD): Validación cruzada acústica de aplausos (Regla 4 de reglasinternas.md).
+    Verifica que en el instante del impacto del aplauso NO haya presencia de voz humana activa,
+    evitando falsos positivos por consonantes oclusivas ('P', 'T', 'K') o golpes vocales.
+    
+    Retorna True si el instante corresponde a 'no-voz' (aplauso confirmado).
+    Retorna False si el instante contiene voz humana (descarte de falso positivo).
+    """
+    if len(signal) == 0:
+        return True
+
+    try:
+        from faster_whisper.vad import get_speech_timestamps, VadOptions
+        
+        # Silero VAD requiere audio mono a 16000 Hz
+        if sr != 16000:
+            import scipy.signal
+            target_len = int(len(signal) * 16000 / sr)
+            signal_16k = scipy.signal.resample(signal, target_len).astype(np.float32)
+            sr_vad = 16000
+        else:
+            signal_16k = signal.astype(np.float32)
+            sr_vad = 16000
+
+        target_sample = int(clap_timestamp_rel * sr_vad)
+        guard_samples = int((guard_window_ms / 1000.0) * sr_vad)
+
+        # Umbral estándar de Silero VAD
+        opts = VadOptions(threshold=0.5, min_speech_duration_ms=60)
+        speech_intervals = get_speech_timestamps(signal_16k, vad_options=opts)
+
+        for interval in speech_intervals:
+            s_start = interval["start"]
+            s_end = interval["end"]
+            # Si el pico del aplauso cae dentro de un segmento de voz activa confirmada por Silero VAD
+            if (s_start - guard_samples) <= target_sample <= (s_end + guard_samples):
+                logger.info(
+                    f"[SileroVAD] Falso positivo rechazado: Se detectó voz activa humana en el instante del pico ({clap_timestamp_rel:.3f}s)."
+                )
+                return False
+
+        return True
+    except Exception as exc:
+        logger.debug(f"[SileroVAD] Fallback por error en VAD ({exc}). Se preserva decisión de Capa 1.")
+        return True
+
+
 def detect_claps_for_markers(
     audio_path: Path | str, 
     markers: List[MarkerResult],
@@ -265,38 +318,54 @@ def detect_claps_for_markers(
             )
 
             if detection and detection["confidence"] >= 2.5:
-                # Timestamp absoluto respecto al inicio del audio
-                clap_abs_timestamp = search_start + detection["timestamp_rel"]
-                delta = clap_abs_timestamp - phrase_end
-
-                results.append(ClapResult(
-                    bloque=marker.bloque,
-                    toma=marker.toma,
-                    phrase_start=round(phrase_start, 3),
-                    phrase_end=round(phrase_end, 3),
-                    clap_timestamp=round(clap_abs_timestamp, 3),
-                    clap_confidence=round(detection["confidence"], 2),
-                    delta_phrase_clap=round(delta, 3),
-                    clap_detected=True,
-                    anchor_timestamp=round(clap_abs_timestamp, 3),
-                    anchor_type="clap"
-                ))
-            else:
-                logger.info(
-                    f"[ClapDetector] Toma sin aplauso de claqueta para Bloque {marker.bloque} "
-                    f"Toma {marker.toma}. Anclaje directo a inicio de habla (fallback phrase_end={phrase_end:.2f}s)."
+                # Capa 2: Validación cruzada acústica con Silero VAD (Regla 4 de reglasinternas.md)
+                # Verifica que en el instante del pico NO haya presencia de voz humana activa
+                is_no_voice = verify_clap_not_voice_silero(
+                    signal=segment,
+                    sr=sr,
+                    clap_timestamp_rel=detection["timestamp_rel"]
                 )
-                results.append(ClapResult(
-                    bloque=marker.bloque,
-                    toma=marker.toma,
-                    phrase_start=round(phrase_start, 3),
-                    phrase_end=round(phrase_end, 3),
-                    clap_timestamp=round(phrase_end, 3),
-                    clap_confidence=0.0,
-                    delta_phrase_clap=0.0,
-                    clap_detected=False,
-                    anchor_timestamp=round(phrase_end, 3),
-                    anchor_type="voice_fallback"
-                ))
+
+                if is_no_voice:
+                    # Timestamp absoluto respecto al inicio del audio
+                    clap_abs_timestamp = search_start + detection["timestamp_rel"]
+                    delta = clap_abs_timestamp - phrase_end
+
+                    results.append(ClapResult(
+                        bloque=marker.bloque,
+                        toma=marker.toma,
+                        phrase_start=round(phrase_start, 3),
+                        phrase_end=round(phrase_end, 3),
+                        clap_timestamp=round(clap_abs_timestamp, 3),
+                        clap_confidence=round(detection["confidence"], 2),
+                        delta_phrase_clap=round(delta, 3),
+                        clap_detected=True,
+                        anchor_timestamp=round(clap_abs_timestamp, 3),
+                        anchor_type="clap"
+                    ))
+                    continue
+                else:
+                    logger.info(
+                        f"[ClapDetector] Pico a los {detection['timestamp_rel']:.2f}s descartado por Silero VAD: "
+                        "coincide con voz humana activa (falso positivo por consonante oclusiva)."
+                    )
+
+            # Fallback transparente si no hubo aplauso o si fue descartado por voz activa
+            logger.info(
+                f"[ClapDetector] Toma sin aplauso de claqueta para Bloque {marker.bloque} "
+                f"Toma {marker.toma}. Anclaje directo a inicio de habla (fallback phrase_end={phrase_end:.2f}s)."
+            )
+            results.append(ClapResult(
+                bloque=marker.bloque,
+                toma=marker.toma,
+                phrase_start=round(phrase_start, 3),
+                phrase_end=round(phrase_end, 3),
+                clap_timestamp=round(phrase_end, 3),
+                clap_confidence=0.0,
+                delta_phrase_clap=0.0,
+                clap_detected=False,
+                anchor_timestamp=round(phrase_end, 3),
+                anchor_type="voice_fallback"
+            ))
 
     return results
