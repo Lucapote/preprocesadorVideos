@@ -1,0 +1,26 @@
+# Entornos virtuales de Python
+.venv/
+venv/
+ENV/
+__pycache__/
+*.pyc
+
+# Node & Frontend
+node_modules/
+dist/
+dist-ssr/
+
+# Storage local de laboratorio (se preservan los .gitignore)
+backend/storage/uploads/*
+!backend/storage/uploads/.gitignore
+backend/storage/artifacts/*
+!backend/storage/artifacts/.gitignore
+
+# Variables de entorno
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp

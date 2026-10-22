@@ -1,0 +1,4 @@
+*
+!.gitignore
+!uploads/.gitignore
+!artifacts/.gitignore
